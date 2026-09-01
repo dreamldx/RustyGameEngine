@@ -1,0 +1,12 @@
+[package]
+name = "MarioEngine"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bevy = { version = "0.19", features = ["file_watcher"] }
+bevy_mod_scripting = { version = "0.21", features = ["lua54"] }
+bevy_mod_scripting_bindings = "0.21"
+bevy_mod_scripting_core = "0.21"
+bevy_egui = "0.42"
+leafwing-input-manager = "0.21"
