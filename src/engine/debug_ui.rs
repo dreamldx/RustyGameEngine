@@ -1,11 +1,13 @@
-use crate::engine::components::{Platform, Player};
-use crate::engine::input::{DebugAction, DebugInputMarker};
+use crate::engine::components::Player;
+use crate::engine::input::{self, DebugAction, DebugInputMarker};
+use crate::engine::level;
 use crate::engine::scripting::ScriptedTuning;
-use crate::engine::{level, player};
-use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
-use bevy::ecs::system::RunSystemOnce;
+use bevy::diagnostic::{
+    DiagnosticsStore, EntityCountDiagnosticsPlugin, FrameTimeDiagnosticsPlugin,
+    SystemInformationDiagnosticsPlugin, SystemInfo,
+};
 use bevy::prelude::*;
-use bevy_egui::{EguiContexts, egui};
+use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
 use bevy_mod_scripting::prelude::ScriptComponent;
 use egui::{LayerId, Ui, UiBuilder};
 use leafwing_input_manager::prelude::*;
@@ -15,8 +17,27 @@ use std::path::Path;
 #[derive(Resource, Default)]
 pub struct UiVisible(pub bool);
 
+/// Visibility of the "Debug" tuning window specifically, toggled from the
+/// menu bar's Window menu — independent of `UiVisible`, which gates the
+/// whole dev overlay (menu bar included). Off by default.
+#[derive(Resource, Default)]
+pub struct DebugWindowVisible(pub bool);
+
 #[derive(Resource, Default)]
 pub struct ReloadLevelRequested(pub bool);
+
+pub struct DebugUiPlugin;
+
+impl Plugin for DebugUiPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_systems(
+            Startup,
+            (build_asset_tree, input::spawn_debug_input_map).chain(),
+        )
+        .add_systems(Update, (toggle_ui_visibility, apply_level_reload))
+        .add_systems(EguiPrimaryContextPass, (draw_debug_ui, draw_panels_ui));
+    }
+}
 
 /// A file or directory under `assets/`, scanned once at startup.
 pub enum FileNode {
@@ -24,7 +45,7 @@ pub enum FileNode {
     Dir(String, Vec<FileNode>),
 }
 
-#[derive(Resource, Default)]
+#[derive(Component, Default)]
 pub struct AssetTree(pub Vec<FileNode>);
 
 fn scan_dir(dir: &Path) -> Vec<FileNode> {
@@ -47,10 +68,10 @@ fn scan_dir(dir: &Path) -> Vec<FileNode> {
         .collect()
 }
 
-/// Scans `assets/` once at startup into `AssetTree`, for the read-only
-/// sidebar. Does not refresh while the app is running.
+/// Scans `assets/` once at startup into an `AssetTree` entity, for the
+/// read-only sidebar. Does not refresh while the app is running.
 pub fn build_asset_tree(mut commands: Commands) {
-    commands.insert_resource(AssetTree(scan_dir(Path::new("assets"))));
+    commands.spawn(AssetTree(scan_dir(Path::new("assets"))));
 }
 
 fn draw_file_nodes(ui: &mut egui::Ui, nodes: &[FileNode]) {
@@ -84,12 +105,16 @@ pub fn toggle_ui_visibility(
 
 pub fn draw_debug_ui(
     visible: Res<UiVisible>,
-    tuning: Res<ScriptedTuning>,
+    debug_window_visible: Res<DebugWindowVisible>,
+    tuning_query: Query<&ScriptedTuning, With<Player>>,
     mut contexts: EguiContexts,
 ) -> Result {
-    if !visible.0 {
+    if !visible.0 || !debug_window_visible.0 {
         return Ok(());
     }
+    let Ok(tuning) = tuning_query.single() else {
+        return Ok(());
+    };
 
     egui::Window::new("Debug").show(contexts.ctx_mut()?, |ui| {
         ui.label(format!("move_speed: {}", tuning.move_speed));
@@ -107,16 +132,23 @@ pub fn draw_debug_ui(
 /// added last so it only fills the space between them, not the corners.
 pub fn draw_panels_ui(
     visible: Res<UiVisible>,
+    mut debug_window_visible: ResMut<DebugWindowVisible>,
     mut contexts: EguiContexts,
     mut reload_requested: ResMut<ReloadLevelRequested>,
     mut exit: MessageWriter<AppExit>,
-    asset_tree: Res<AssetTree>,
+    asset_tree_query: Query<&AssetTree>,
     diagnostics: Res<DiagnosticsStore>,
+    system_info: Res<SystemInfo>,
     scripts: Query<&ScriptComponent>,
 ) -> Result {
     if !visible.0 {
         return Ok(());
     }
+    let empty_asset_tree = Vec::new();
+    let asset_tree_nodes: &[FileNode] = asset_tree_query
+        .single()
+        .map(|tree| tree.0.as_slice())
+        .unwrap_or(&empty_asset_tree);
 
     let ctx = contexts.ctx_mut()?;
     let mut root_ui = Ui::new(
@@ -139,6 +171,9 @@ pub fn draw_panels_ui(
                     ui.close();
                 }
             });
+            ui.menu_button("Window", |ui| {
+                ui.checkbox(&mut debug_window_visible.0, "Debug Window");
+            });
         });
     });
 
@@ -147,11 +182,44 @@ pub fn draw_panels_ui(
             .get(&FrameTimeDiagnosticsPlugin::FPS)
             .and_then(|d| d.smoothed())
             .unwrap_or(0.0);
+        let frame_time = diagnostics
+            .get(&FrameTimeDiagnosticsPlugin::FRAME_TIME)
+            .and_then(|d| d.smoothed())
+            .unwrap_or(0.0);
+        let entity_count = diagnostics
+            .get(&EntityCountDiagnosticsPlugin::ENTITY_COUNT)
+            .and_then(|d| d.value())
+            .unwrap_or(0.0);
+        let cpu_usage = diagnostics
+            .get(&SystemInformationDiagnosticsPlugin::SYSTEM_CPU_USAGE)
+            .and_then(|d| d.smoothed())
+            .unwrap_or(0.0);
+        let mem_usage = diagnostics
+            .get(&SystemInformationDiagnosticsPlugin::PROCESS_MEM_USAGE)
+            .and_then(|d| d.smoothed())
+            .unwrap_or(0.0);
         let script_count: usize = scripts.iter().map(|s| s.0.len()).sum();
+
         ui.horizontal(|ui| {
             ui.label(format!("FPS: {fps:.0}"));
             ui.separator();
-            ui.label(format!("Scripts loaded: {script_count}"));
+            ui.label(format!("Frame: {frame_time:.1}ms"));
+            ui.separator();
+            ui.label(format!("Entities: {entity_count:.0}"));
+            ui.separator();
+            ui.label(format!("Scripts: {script_count}"));
+            ui.separator();
+            ui.label(format!("CPU: {cpu_usage:.0}%"));
+            ui.separator();
+            ui.label(format!("Mem: {mem_usage:.1} GiB"));
+            ui.separator();
+            ui.label(format!(
+                "{} | {} cores | {} | {}",
+                system_info.os,
+                system_info.core_count,
+                system_info.cpu,
+                system_info.memory,
+            ));
         });
     });
 
@@ -163,18 +231,17 @@ pub fn draw_panels_ui(
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
-            draw_file_nodes(ui, &asset_tree.0);
+            draw_file_nodes(ui, asset_tree_nodes);
         });
     });
 
     Ok(())
 }
 
-/// Despawns all `Platform`/`Player` entities and re-runs `spawn_level` and
-/// `spawn_player`, when `ReloadLevelRequested` was set by the "Reload Level"
-/// button. Runs with direct `&mut World` access so the despawn and the
-/// respawn happen in the same frame, with no deferred-command ordering to
-/// coordinate.
+/// Despawns the current level's `Platform`/`Player` entities and re-requests
+/// the level's `load()`, when `ReloadLevelRequested` was set by the "Reload
+/// Level" button. The actual respawn happens asynchronously once the
+/// level script's `load()` callback responds (see `level.rs`).
 pub fn apply_level_reload(world: &mut World) {
     let should_reload = {
         let mut requested = world.resource_mut::<ReloadLevelRequested>();
@@ -186,21 +253,9 @@ pub fn apply_level_reload(world: &mut World) {
         return;
     }
 
-    let mut platform_query = world.query_filtered::<Entity, With<Platform>>();
-    let platforms: Vec<Entity> = platform_query.iter(world).collect();
-    let mut player_query = world.query_filtered::<Entity, With<Player>>();
-    let players: Vec<Entity> = player_query.iter(world).collect();
-    for entity in platforms.into_iter().chain(players) {
-        world.despawn(entity);
-    }
-
-    if let Err(e) = world.run_system_once(level::spawn_level) {
-        error!("Failed to respawn level: {e}");
-        return;
-    }
-    if let Err(e) = world.run_system_once(player::spawn_player) {
-        error!("Failed to respawn player: {e}");
-    }
+    // Only one level exists right now; if/when level selection is added,
+    // this needs to come from a tracked "current level" resource instead.
+    level::reload_level(world, "main");
 }
 
 #[cfg(test)]
