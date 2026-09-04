@@ -16,8 +16,8 @@ $ErrorActionPreference = "Stop"
 
 cargo build --release
 
-$exeName = "MarioEngine.exe"
-$distDir = Join-Path $OutDir "MarioEngine"
+$exeName = "RustyGameEngine.exe"
+$distDir = Join-Path $OutDir "RustyGameEngine"
 
 if (Test-Path $distDir) {
     Remove-Item -Recurse -Force $distDir
