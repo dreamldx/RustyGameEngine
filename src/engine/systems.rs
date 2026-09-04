@@ -15,6 +15,7 @@ impl Plugin for GameplaySystemsPlugin {
         app.init_resource::<ReloadLevelRequested>()
             .init_resource::<ReadyToPlay>()
             .init_resource::<input::PendingPlayerInputMap>()
+
             .add_plugins((
                 player::PlayerPlugin,
                 camera::CameraPlugin,

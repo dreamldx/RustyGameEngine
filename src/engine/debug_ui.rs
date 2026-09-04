@@ -30,9 +30,11 @@ pub struct DebugUiPlugin;
 
 impl Plugin for DebugUiPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(
-            Startup,
-            (build_asset_tree, input::spawn_debug_input_map).chain(),
+        app.init_resource::<UiVisible>()
+            .init_resource::<DebugWindowVisible>()
+            .add_systems(
+                Startup,
+                (build_asset_tree, input::spawn_debug_input_map).chain(),
         )
         .add_systems(Update, (toggle_ui_visibility, apply_level_reload))
         .add_systems(EguiPrimaryContextPass, (draw_debug_ui, draw_panels_ui));

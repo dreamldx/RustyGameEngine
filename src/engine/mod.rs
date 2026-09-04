@@ -15,7 +15,6 @@ use bevy::prelude::*;
 use bevy::reflect::TypeRegistration;
 use bevy_egui::EguiPlugin;
 use bevy_mod_scripting::prelude::*;
-use debug_ui::{DebugWindowVisible, UiVisible};
 use input::{DebugAction, PlayerAction};
 use leafwing_input_manager::prelude::InputManagerPlugin;
 
@@ -62,8 +61,7 @@ impl Plugin for EnginePlugin {
             filter: script_globals_filter,
             ..default()
         }))
-            .init_resource::<UiVisible>()
-            .init_resource::<DebugWindowVisible>()
+
             .add_plugins(EguiPlugin::default())
             .add_plugins(FrameTimeDiagnosticsPlugin::default())
             .add_plugins(EntityCountDiagnosticsPlugin::default())
