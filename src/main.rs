@@ -9,6 +9,7 @@ fn main() {
         .add_plugins((
             DefaultPlugins.set(WindowPlugin {
                 primary_window: Some(Window {
+                    title: "RustGameEngine".into(),
                     resolution: WindowResolution::new(1920, 1080),
                     ..default()
                 }),
