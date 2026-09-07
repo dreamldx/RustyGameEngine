@@ -58,10 +58,18 @@ impl Plugin for EnginePlugin {
         scripting::register_functions(app.world_mut());
         level::register_functions(app.world_mut());
 
-        app.add_plugins(BMSPlugin.build().set(CoreScriptGlobalsPlugin {
-            filter: script_globals_filter,
-            ..default()
-        }))
+        app.add_plugins(
+            BMSPlugin
+                .build()
+                .set(CoreScriptGlobalsPlugin {
+                    filter: script_globals_filter,
+                    ..default()
+                })
+                .set(
+                    LuaScriptingPlugin::default()
+                        .add_context_initializer(scripting::configure_lua_package_path),
+                ),
+        )
 
             .add_plugins(RapierPhysicsPlugin::<NoUserData>::default())
             .add_plugins(EguiPlugin::default())

@@ -1,0 +1,200 @@
+format: 1
+
+entities:
+  - type: PlayerSpawn
+    position: { x: 960.0, y: 220.0 }
+
+  # ---------- 边框 ----------
+  - type: Platform
+    name: Floor
+    position: { x: 960.0, y: 15.0 }
+    points:
+      - { x: -960, y: -15 }
+      - { x: 960, y: -15 }
+      - { x: 960, y: 15 }
+      - { x: -960, y: 15 }
+    color: [0.4, 0.4, 0.4, 1.0]
+
+  - type: Platform
+    name: Ceiling
+    position: { x: 960.0, y: 1065.0 }
+    points:
+      - { x: -960, y: -15 }
+      - { x: 960, y: -15 }
+      - { x: 960, y: 15 }
+      - { x: -960, y: 15 }
+    color: [0.4, 0.4, 0.4, 1.0]
+
+  - type: Platform
+    name: WallLeft
+    position: { x: 15.0, y: 540.0 }
+    points:
+      - { x: -15, y: -540 }
+      - { x: 15, y: -540 }
+      - { x: 15, y: 540 }
+      - { x: -15, y: 540 }
+    color: [0.4, 0.4, 0.4, 1.0]
+
+  - type: Platform
+    name: WallRight
+    position: { x: 1905.0, y: 540.0 }
+    points:
+      - { x: -15, y: -540 }
+      - { x: 15, y: -540 }
+      - { x: 15, y: 540 }
+      - { x: -15, y: 540 }
+    color: [0.4, 0.4, 0.4, 1.0]
+
+  # ---------- 起始岛（出生点正下方） ----------
+  - type: Platform
+    name: StartIsland
+    position: { x: 960.0, y: 120.0 }
+    points:
+      - { x: -150, y: -20 }
+      - { x: 150, y: -20 }
+      - { x: 150, y: 20 }
+      - { x: -150, y: 20 }
+    color: [0.55, 0.35, 0.15, 1.0]
+
+  # 地面上的两个三角凸起，掉下去后要跳过它们回岛
+  - type: Platform
+    name: BumpLeft
+    position: { x: 600.0, y: 30.0 }
+    points:
+      - { x: -40, y: 0 }
+      - { x: 40, y: 0 }
+      - { x: 0, y: 50 }
+    color: [0.9, 0.55, 0.2, 1.0]
+
+  - type: Platform
+    name: BumpRight
+    position: { x: 1320.0, y: 30.0 }
+    points:
+      - { x: -40, y: 0 }
+      - { x: 40, y: 0 }
+      - { x: 0, y: 50 }
+    color: [0.9, 0.55, 0.2, 1.0]
+
+  # ---------- 左路线：矩形阶梯 → 立柱 → 高台 → 斜坡 ----------
+  - type: Platform
+    position: { x: 700.0, y: 240.0 }
+    points:
+      - { x: -70, y: -12 }
+      - { x: 70, y: -12 }
+      - { x: 70, y: 12 }
+      - { x: -70, y: 12 }
+    color: [0.2, 0.4, 0.8, 1.0]
+
+  - type: Platform
+    position: { x: 480.0, y: 360.0 }
+    points:
+      - { x: -60, y: -12 }
+      - { x: 60, y: -12 }
+      - { x: 60, y: 12 }
+      - { x: -60, y: 12 }
+    color: [0.2, 0.4, 0.8, 1.0]
+
+  - type: Platform
+    name: PillarLeft
+    position: { x: 300.0, y: 300.0 }
+    points:
+      - { x: -40, y: -270 }
+      - { x: 40, y: -270 }
+      - { x: 40, y: 270 }
+      - { x: -40, y: 270 }
+    color: [0.3, 0.3, 0.35, 1.0]
+
+  - type: Platform
+    position: { x: 520.0, y: 640.0 }
+    points:
+      - { x: -80, y: -12 }
+      - { x: 80, y: -12 }
+      - { x: 80, y: 12 }
+      - { x: -80, y: 12 }
+    color: [0.2, 0.4, 0.8, 1.0]
+
+  - type: Platform
+    name: RampLeft
+    position: { x: 760.0, y: 760.0 }
+    points:
+      - { x: -120, y: -12 }
+      - { x: 120, y: -12 }
+      - { x: 120, y: 40 }
+    color: [0.6, 0.3, 0.7, 1.0]
+
+  # ---------- 右路线：喇叭形梯形阶梯 → 立柱 → 高台 → 斜坡 ----------
+  - type: Platform
+    position: { x: 1220.0, y: 240.0 }
+    points:
+      - { x: -50, y: -12 }
+      - { x: 50, y: -12 }
+      - { x: 70, y: 12 }
+      - { x: -70, y: 12 }
+    color: [0.8, 0.25, 0.25, 1.0]
+
+  - type: Platform
+    position: { x: 1440.0, y: 360.0 }
+    points:
+      - { x: -40, y: -12 }
+      - { x: 40, y: -12 }
+      - { x: 60, y: 12 }
+      - { x: -60, y: 12 }
+    color: [0.8, 0.25, 0.25, 1.0]
+
+  - type: Platform
+    name: PillarRight
+    position: { x: 1620.0, y: 300.0 }
+    points:
+      - { x: -40, y: -270 }
+      - { x: 40, y: -270 }
+      - { x: 40, y: 270 }
+      - { x: -40, y: 270 }
+    color: [0.3, 0.3, 0.35, 1.0]
+
+  - type: Platform
+    position: { x: 1400.0, y: 640.0 }
+    points:
+      - { x: -60, y: -12 }
+      - { x: 60, y: -12 }
+      - { x: 80, y: 12 }
+      - { x: -80, y: 12 }
+    color: [0.8, 0.25, 0.25, 1.0]
+
+  - type: Platform
+    name: RampRight
+    position: { x: 1160.0, y: 760.0 }
+    points:
+      - { x: -120, y: -12 }
+      - { x: 120, y: -12 }
+      - { x: -120, y: 40 }
+    color: [0.6, 0.3, 0.7, 1.0]
+
+  # ---------- 山顶 ----------
+  - type: Platform
+    name: Summit
+    position: { x: 960.0, y: 880.0 }
+    points:
+      - { x: -100, y: -16 }
+      - { x: 100, y: -16 }
+      - { x: 100, y: 16 }
+      - { x: -100, y: 16 }
+    color: [0.95, 0.8, 0.2, 1.0]
+
+  # 天花板钟乳石（尖端朝下，避开山顶正上方）
+  - type: Platform
+    name: StalactiteLeft
+    position: { x: 700.0, y: 1050.0 }
+    points:
+      - { x: 60, y: 0 }
+      - { x: -60, y: 0 }
+      - { x: 0, y: -90 }
+    color: [0.1, 0.7, 0.6, 1.0]
+
+  - type: Platform
+    name: StalactiteRight
+    position: { x: 1220.0, y: 1050.0 }
+    points:
+      - { x: 60, y: 0 }
+      - { x: -60, y: 0 }
+      - { x: 0, y: -90 }
+    color: [0.1, 0.7, 0.6, 1.0]

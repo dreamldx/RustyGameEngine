@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use bevy_mod_scripting::lua::{IntoInteropError, LuaContext, mlua};
 use bevy_mod_scripting::prelude::*;
 use bevy_mod_scripting_bindings::{FunctionCallContext, InteropError, ScriptValue};
 use crate::engine::components::Player;
@@ -76,6 +77,30 @@ impl World {
         })?;
         Ok(())
     }
+}
+
+/// Prepends two module roots to Lua's `package.path`, so scripts can
+/// `require` by bare/dotted module name instead of a hardcoded `dofile`
+/// path: `assets/scripts/lib/` for vendored third-party libraries (e.g. the
+/// yscn loader's YAML parser), and `assets/levels/` for level-local modules
+/// (e.g. `require("loader.yscn")` from a level script). Each script gets
+/// its own Lua context, so this runs once per context.
+pub fn configure_lua_package_path(
+    _script: &ScriptAttachment,
+    context: &mut LuaContext,
+) -> Result<(), InteropError> {
+    let package: mlua::Table = context
+        .globals()
+        .get("package")
+        .map_err(IntoInteropError::to_bms_error)?;
+    let existing_path: String = package.get("path").map_err(IntoInteropError::to_bms_error)?;
+    package
+        .set(
+            "path",
+            format!("assets/scripts/lib/?.lua;assets/levels/?.lua;{existing_path}"),
+        )
+        .map_err(IntoInteropError::to_bms_error)?;
+    Ok(())
 }
 
 /// Scans `assets/scripts/` for every `.lua` file, loads it, and spawns a

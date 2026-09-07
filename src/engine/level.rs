@@ -164,7 +164,7 @@ pub fn spawn_platform_entity(
 }
 
 /// Maps a level name to its script entity, populated by `load_level_scripts`
-/// (from the filename of `assets/scripts/levels/<name>.lua`). The mapping
+/// (from the filename of `assets/levels/<name>.lua`). The mapping
 /// happens entirely Rust-side rather than via a script-side registration
 /// call, because the bindings API in this bevy_mod_scripting version has no
 /// way for a bound function to know which script called it
@@ -212,7 +212,7 @@ impl Plugin for LevelLoadPlugin {
 
 #[script_bindings(remote, unregistered)]
 impl World {
-    /// Called from a level script's `on_level_load()` (e.g. `assets/scripts/levels/main.lua`)
+    /// Called from a level script's `on_level_load()` (e.g. `assets/levels/dym_level.lua`)
     /// as `world.spawn_platform(x, y, points, color)`. `points` is a list of
     /// `{x=.., y=..}` tables (relative to x/y), `color` is a `{r,g,b,a}` list.
     pub fn spawn_platform(
@@ -298,7 +298,7 @@ fn parse_color(value: &ScriptValue) -> Option<[f32; 4]> {
     Some(out)
 }
 
-/// Scans `assets/scripts/levels/` for `.lua` files. Each file's name (minus
+/// Scans `assets/levels/` for `.lua` files. Each file's name (minus
 /// `.lua`) is recorded in `LevelRegistry` as its level name, immediately
 /// (registration doesn't need to wait for the script to finish loading —
 /// only actually *calling* `on_level_load()` does, which `request_level_load`
@@ -308,7 +308,7 @@ pub fn load_level_scripts(
     mut commands: Commands,
     mut registry: ResMut<LevelRegistry>,
 ) {
-    let dir = Path::new("assets/scripts/levels");
+    let dir = Path::new("assets/levels");
     let entries = match fs::read_dir(dir) {
         Ok(entries) => entries,
         Err(e) => {
@@ -329,7 +329,7 @@ pub fn load_level_scripts(
             continue;
         };
 
-        let handle = asset_server.load::<ScriptAsset>(format!("scripts/levels/{file_name}"));
+        let handle = asset_server.load::<ScriptAsset>(format!("levels/{file_name}"));
         let entity = commands.spawn(ScriptComponent(vec![handle])).id();
         registry.0.insert(name.to_string(), entity);
     }
