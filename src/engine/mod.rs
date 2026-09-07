@@ -21,7 +21,7 @@ use leafwing_input_manager::prelude::InputManagerPlugin;
 
 pub struct EnginePlugin;
 
-/// Set once the current level's `load()` callback has responded, signaling
+/// Set once the current level's `on_level_load()` callback has responded, signaling
 /// that `PlayerSpawn` is populated and it's safe to spawn the player (and,
 /// the first time, the camera). See `level::handle_level_load_response` /
 /// `player::spawn_player`.

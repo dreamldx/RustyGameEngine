@@ -1,4 +1,4 @@
-function load()
+function on_level_load()
     -- Start
     world.spawn_platform(200.0, -20.0, { { x = -150.0, y = -20.0 }, { x = 150.0, y = -20.0 }, { x = 150.0, y = 20.0 }, { x = -150.0, y = 20.0 } }, { 0.55, 0.35, 0.15, 1.0 })
     -- P0

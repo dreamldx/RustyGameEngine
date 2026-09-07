@@ -28,9 +28,9 @@ impl Default for LevelBounds {
     }
 }
 
-/// Whether the current level's `load()` has explicitly called
+/// Whether the current level's `on_level_load()` has explicitly called
 /// `world.set_level_bounds(...)`. Reset to `false` each time a level load is
-/// requested (`request_level_load`); if still `false` once `load()`
+/// requested (`request_level_load`); if still `false` once `on_level_load()`
 /// finishes, `handle_level_load_response` falls back to `0..ObservedMaxX`
 /// instead of leaving the *previous* level's `LevelBounds` in place.
 #[derive(Resource, Default)]
@@ -59,7 +59,7 @@ const BOUNDARY_WALL_HALF_HEIGHT: f32 = 100_000.0;
 
 /// Respawns the two static invisible boundary walls whenever `LevelBounds`
 /// changes (initial default on startup, or a level script/yscn scene
-/// setting its own range during `load()`). Rapier's own character-controller
+/// setting its own range during `on_level_load()`). Rapier's own character-controller
 /// sweep then enforces the range the same way it enforces collision with any
 /// platform, instead of a separate manual clamp in `systems::move_player_kcc`.
 pub fn sync_level_bounds_walls(
@@ -173,17 +173,17 @@ pub fn spawn_platform_entity(
 #[derive(Resource, Default)]
 pub struct LevelRegistry(pub HashMap<String, Entity>);
 
-/// Set to request that a named level's `load()` function be called. Cleared
+/// Set to request that a named level's `on_level_load()` function be called. Cleared
 /// once the request has been sent (see `PendingLevelLoad` for the in-flight
 /// state after that).
 #[derive(Resource, Default)]
 pub struct LevelLoadRequested(pub Option<String>);
 
-/// The level name currently waiting on a `load()` callback response.
+/// The level name currently waiting on an `on_level_load()` callback response.
 #[derive(Resource, Default)]
 pub struct PendingLevelLoad(pub Option<String>);
 
-callback_labels!(OnLoadLevel => "load");
+callback_labels!(OnLoadLevel => "on_level_load");
 
 pub struct LevelLoadPlugin;
 
@@ -201,7 +201,7 @@ impl Plugin for LevelLoadPlugin {
                     request_level_load,
                     handle_level_load_response,
                     // Actually dispatches ScriptCallbackEvent -> the script's
-                    // Lua `load` function. Without this, request_level_load's
+                    // Lua `on_level_load` function. Without this, request_level_load's
                     // event just sits in the message queue forever.
                     event_handler::<OnLoadLevel, LuaScriptingPlugin>,
                     sync_level_bounds_walls,
@@ -212,7 +212,7 @@ impl Plugin for LevelLoadPlugin {
 
 #[script_bindings(remote, unregistered)]
 impl World {
-    /// Called from a level script's `load()` (e.g. `assets/scripts/levels/main.lua`)
+    /// Called from a level script's `on_level_load()` (e.g. `assets/scripts/levels/main.lua`)
     /// as `world.spawn_platform(x, y, points, color)`. `points` is a list of
     /// `{x=.., y=..}` tables (relative to x/y), `color` is a `{r,g,b,a}` list.
     pub fn spawn_platform(
@@ -234,7 +234,7 @@ impl World {
         Ok(())
     }
 
-    /// Called from a level script's `load()` as `world.set_player_spawn(x, y)`.
+    /// Called from a level script's `on_level_load()` as `world.set_player_spawn(x, y)`.
     pub fn set_player_spawn(context: FunctionCallContext, x: f32, y: f32) -> Result<(), InteropError> {
         let world = context.world()?;
         world.with_world_mut_access(|world| {
@@ -243,7 +243,7 @@ impl World {
         Ok(())
     }
 
-    /// Called from a level script's `load()` as
+    /// Called from a level script's `on_level_load()` as
     /// `world.set_level_bounds(min_x, max_x)`. Optional — a level that never
     /// calls this gets `0..ObservedMaxX` instead (see `LevelBoundsExplicit`).
     /// Triggers `sync_level_bounds_walls` to respawn the boundary walls at
@@ -301,7 +301,7 @@ fn parse_color(value: &ScriptValue) -> Option<[f32; 4]> {
 /// Scans `assets/scripts/levels/` for `.lua` files. Each file's name (minus
 /// `.lua`) is recorded in `LevelRegistry` as its level name, immediately
 /// (registration doesn't need to wait for the script to finish loading —
-/// only actually *calling* `load()` does, which `request_level_load`
+/// only actually *calling* `on_level_load()` does, which `request_level_load`
 /// handles separately).
 pub fn load_level_scripts(
     asset_server: Res<AssetServer>,
@@ -335,7 +335,7 @@ pub fn load_level_scripts(
     }
 }
 
-/// Sends the `load` callback for the requested level, once. Doesn't retry —
+/// Sends the `on_level_load` callback for the requested level, once. Doesn't retry —
 /// if the script isn't loaded yet when this fires, the event is dropped by
 /// bevy_mod_scripting's own dispatch (no context to call into), same as any
 /// callback sent for an unloaded script.
@@ -390,7 +390,7 @@ fn handle_level_load_response(
             continue;
         }
         if let Err(e) = &response.response {
-            error!("Level '{name}' load() failed: {e}");
+            error!("Level '{name}' on_level_load() failed: {e}");
         }
         if !bounds_explicit.0 {
             *bounds = LevelBounds { min_x: 0.0, max_x: observed_max_x.0 };
@@ -402,7 +402,7 @@ fn handle_level_load_response(
 }
 
 /// Despawns all `Platform`/`Player` entities and re-requests the given
-/// level's `load()`, for the "Reload Level" button.
+/// level's `on_level_load()`, for the "Reload Level" button.
 pub fn reload_level(world: &mut World, name: &str) {
     let mut platform_query = world.query_filtered::<Entity, With<Platform>>();
     let platforms: Vec<Entity> = platform_query.iter(world).collect();

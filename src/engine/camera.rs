@@ -11,7 +11,7 @@ impl Plugin for CameraPlugin {
         // that bevy_render's camera_system gets to compute its real
         // Projection area in the one-time PostStartup pass, before the
         // first Update tick ever runs. A camera created later, during
-        // Update (e.g. only once the level's load() responds), misses that
+        // Update (e.g. only once the level's on_level_load() responds), misses that
         // PostStartup pass entirely and sits on a placeholder Projection
         // area for a full frame, which player::spawn_player's own
         // reframing logic can't tell apart from a real (tiny) viewport.

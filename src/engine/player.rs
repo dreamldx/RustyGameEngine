@@ -18,7 +18,7 @@ impl Plugin for PlayerPlugin {
     }
 }
 
-/// Spawns the player once level `load()` has populated `PlayerSpawn`, and
+/// Spawns the player once level `on_level_load()` has populated `PlayerSpawn`, and
 /// reframes the camera (spawned separately at Startup, see `camera.rs`) so
 /// the player sits at the lower quarter of the view — this runs on every
 /// "Reload Level" respawn too, not just the first time, so the camera
