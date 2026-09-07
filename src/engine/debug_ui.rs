@@ -2,6 +2,7 @@ use crate::engine::components::Player;
 use crate::engine::input::{self, DebugAction, DebugInputMarker};
 use crate::engine::level;
 use crate::engine::scripting::ScriptedTuning;
+use crate::engine::systems;
 use bevy::diagnostic::{
     DiagnosticsStore, EntityCountDiagnosticsPlugin, FrameTimeDiagnosticsPlugin,
     SystemInformationDiagnosticsPlugin, SystemInfo,
@@ -23,8 +24,29 @@ pub struct UiVisible(pub bool);
 #[derive(Resource, Default)]
 pub struct DebugWindowVisible(pub bool);
 
+/// Visibility of the level-bounds gizmo (see `draw_bounds_gizmo`), toggled
+/// from the menu bar's Window menu. Off by default.
+#[derive(Resource, Default)]
+pub struct BoundsGizmoVisible(pub bool);
+
 #[derive(Resource, Default)]
 pub struct ReloadLevelRequested(pub bool);
+
+/// Set by double-clicking a level file in the asset panel; consumed by
+/// `apply_level_reload`, which loads that level and updates `CurrentLevel`.
+#[derive(Resource, Default)]
+pub struct LoadLevelRequested(pub Option<String>);
+
+/// The name of the level last loaded (via double-click or "Reload Level"),
+/// so "Reload Level" knows what to reload once more than one level exists.
+#[derive(Resource)]
+pub struct CurrentLevel(pub String);
+
+impl Default for CurrentLevel {
+    fn default() -> Self {
+        Self("main".to_string())
+    }
+}
 
 pub struct DebugUiPlugin;
 
@@ -32,11 +54,14 @@ impl Plugin for DebugUiPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<UiVisible>()
             .init_resource::<DebugWindowVisible>()
+            .init_resource::<BoundsGizmoVisible>()
+            .init_resource::<LoadLevelRequested>()
+            .init_resource::<CurrentLevel>()
             .add_systems(
                 Startup,
                 (build_asset_tree, input::spawn_debug_input_map).chain(),
         )
-        .add_systems(Update, (toggle_ui_visibility, apply_level_reload))
+        .add_systems(Update, (toggle_ui_visibility, apply_level_reload, draw_bounds_gizmo))
         .add_systems(EguiPrimaryContextPass, (draw_debug_ui, draw_panels_ui));
     }
 }
@@ -55,7 +80,10 @@ fn scan_dir(dir: &Path) -> Vec<FileNode> {
         return Vec::new();
     };
     let mut paths: Vec<_> = read_dir.flatten().map(|entry| entry.path()).collect();
-    paths.sort();
+    // Directories before files, alphabetically within each group.
+    paths.sort_by(|a, b| {
+        (a.is_file(), a.file_name()).cmp(&(b.is_file(), b.file_name()))
+    });
 
     paths
         .into_iter()
@@ -76,21 +104,71 @@ pub fn build_asset_tree(mut commands: Commands) {
     commands.spawn(AssetTree(scan_dir(Path::new("assets"))));
 }
 
-fn draw_file_nodes(ui: &mut egui::Ui, nodes: &[FileNode]) {
+/// Draws the asset tree. `in_levels_dir` marks recursion inside the
+/// top-level `levels/` folder, where files are double-clickable to load as
+/// the current level; returns the double-clicked file's name (minus
+/// extension) if one was double-clicked this frame.
+fn draw_file_nodes(ui: &mut egui::Ui, nodes: &[FileNode], in_levels_dir: bool) -> Option<String> {
+    let mut loaded = None;
     for node in nodes {
         match node {
             FileNode::File(name) => {
-                ui.label(name);
+                if in_levels_dir {
+                    let response = ui.add(egui::Label::new(name).sense(egui::Sense::click()));
+                    if response.double_clicked() {
+                        let level_name = name.rsplit_once('.').map_or(name.as_str(), |(stem, _)| stem);
+                        loaded = Some(level_name.to_string());
+                    }
+                } else {
+                    ui.label(name);
+                }
             }
             FileNode::Dir(name, children) => {
+                // Not `in_levels_dir || name == "levels"` — `load_level_scripts`
+                // only scans the immediate contents of `assets/levels` via
+                // `fs::read_dir` (non-recursive), so a file nested any deeper
+                // isn't a loadable level and shouldn't be clickable as one.
+                let child_in_levels = name == "levels";
                 egui::CollapsingHeader::new(name)
                     .default_open(false)
                     .show(ui, |ui| {
-                        draw_file_nodes(ui, children);
+                        if let Some(name) = draw_file_nodes(ui, children, child_in_levels) {
+                            loaded = Some(name);
+                        }
                     });
             }
         }
     }
+    loaded
+}
+
+/// Draws the current level's horizontal bounds (two vertical lines at
+/// `LevelBounds::min_x`/`max_x`) and the fall-death respawn line (a
+/// horizontal line at `systems::FALL_DEATH_Y`, spanning the level width),
+/// when the "Bounds Gizmo" checkbox is on.
+pub fn draw_bounds_gizmo(
+    visible: Res<BoundsGizmoVisible>,
+    bounds: Res<level::LevelBounds>,
+    mut gizmos: Gizmos,
+) {
+    if !visible.0 {
+        return;
+    }
+
+    let bounds_color = Color::srgb(0.2, 0.8, 1.0);
+    let respawn_color = Color::srgb(1.0, 0.2, 0.2);
+    // Tall enough to stay visible however far the player wanders vertically,
+    // without needing to know the level's actual vertical extent.
+    let top = 2000.0;
+    let bottom = systems::FALL_DEATH_Y - 200.0;
+
+    gizmos.line_2d(Vec2::new(bounds.min_x, bottom), Vec2::new(bounds.min_x, top), bounds_color);
+    gizmos.line_2d(Vec2::new(bounds.max_x, bottom), Vec2::new(bounds.max_x, top), bounds_color);
+    gizmos.line_2d(
+        Vec2::new(bounds.min_x, systems::FALL_DEATH_Y),
+        Vec2::new(bounds.max_x, systems::FALL_DEATH_Y),
+        respawn_color,
+    );
 }
 
 pub fn toggle_ui_visibility(
@@ -135,8 +213,11 @@ pub fn draw_debug_ui(
 pub fn draw_panels_ui(
     visible: Res<UiVisible>,
     mut debug_window_visible: ResMut<DebugWindowVisible>,
+    mut bounds_gizmo_visible: ResMut<BoundsGizmoVisible>,
     mut contexts: EguiContexts,
     mut reload_requested: ResMut<ReloadLevelRequested>,
+    mut load_level_requested: ResMut<LoadLevelRequested>,
+    current_level: Res<CurrentLevel>,
     mut exit: MessageWriter<AppExit>,
     asset_tree_query: Query<&AssetTree>,
     diagnostics: Res<DiagnosticsStore>,
@@ -175,6 +256,7 @@ pub fn draw_panels_ui(
             });
             ui.menu_button("Window", |ui| {
                 ui.checkbox(&mut debug_window_visible.0, "Debug Window");
+                ui.checkbox(&mut bounds_gizmo_visible.0, "Bounds Gizmo");
             });
         });
     });
@@ -203,6 +285,8 @@ pub fn draw_panels_ui(
         let script_count: usize = scripts.iter().map(|s| s.0.len()).sum();
 
         ui.horizontal(|ui| {
+            ui.label(format!("Level: {}", current_level.0));
+            ui.separator();
             ui.label(format!("FPS: {fps:.0}"));
             ui.separator();
             ui.label(format!("Frame: {frame_time:.1}ms"));
@@ -233,7 +317,9 @@ pub fn draw_panels_ui(
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
-            draw_file_nodes(ui, asset_tree_nodes);
+            if let Some(name) = draw_file_nodes(ui, asset_tree_nodes, false) {
+                load_level_requested.0 = Some(name);
+            }
         });
     });
 
@@ -241,23 +327,35 @@ pub fn draw_panels_ui(
 }
 
 /// Despawns the current level's `Platform`/`Player` entities and re-requests
-/// the level's `load()`, when `ReloadLevelRequested` was set by the "Reload
-/// Level" button. The actual respawn happens asynchronously once the
-/// level script's `load()` callback responds (see `level.rs`).
+/// a level's `on_level_load()`, when `LoadLevelRequested` names a specific level
+/// (double-clicked in the asset panel) or `ReloadLevelRequested` was set by
+/// the "Reload Level" button (reloads `CurrentLevel`). The actual respawn
+/// happens asynchronously once the level script's `on_level_load()` callback responds
+/// (see `level.rs`).
 pub fn apply_level_reload(world: &mut World) {
-    let should_reload = {
-        let mut requested = world.resource_mut::<ReloadLevelRequested>();
-        let should_reload = requested.0;
-        requested.0 = false;
-        should_reload
+    let requested_level = {
+        let mut requested = world.resource_mut::<LoadLevelRequested>();
+        requested.0.take()
     };
-    if !should_reload {
-        return;
-    }
 
-    // Only one level exists right now; if/when level selection is added,
-    // this needs to come from a tracked "current level" resource instead.
-    level::reload_level(world, "main");
+    let name = if let Some(name) = requested_level {
+        Some(name)
+    } else {
+        let should_reload = {
+            let mut reload = world.resource_mut::<ReloadLevelRequested>();
+            let should_reload = reload.0;
+            reload.0 = false;
+            should_reload
+        };
+        should_reload.then(|| world.resource::<CurrentLevel>().0.clone())
+    };
+
+    let Some(name) = name else {
+        return;
+    };
+
+    world.resource_mut::<CurrentLevel>().0 = name.clone();
+    level::reload_level(world, &name);
 }
 
 #[cfg(test)]
@@ -284,5 +382,44 @@ mod tests {
         app.update();
 
         assert!(app.world().resource::<UiVisible>().0);
+    }
+
+    #[test]
+    fn apply_level_reload_loads_requested_level_and_updates_current() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.init_resource::<ReloadLevelRequested>();
+        app.insert_resource(LoadLevelRequested(Some("other".to_string())));
+        app.insert_resource(CurrentLevel("main".to_string()));
+        app.init_resource::<level::LevelLoadRequested>();
+        app.add_systems(Update, apply_level_reload);
+
+        app.update();
+
+        assert_eq!(app.world().resource::<CurrentLevel>().0, "other");
+        assert!(app.world().resource::<LoadLevelRequested>().0.is_none());
+        assert_eq!(
+            app.world().resource::<level::LevelLoadRequested>().0,
+            Some("other".to_string())
+        );
+    }
+
+    #[test]
+    fn apply_level_reload_falls_back_to_current_level_when_no_specific_request() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.insert_resource(ReloadLevelRequested(true));
+        app.init_resource::<LoadLevelRequested>();
+        app.insert_resource(CurrentLevel("main".to_string()));
+        app.init_resource::<level::LevelLoadRequested>();
+        app.add_systems(Update, apply_level_reload);
+
+        app.update();
+
+        assert_eq!(app.world().resource::<CurrentLevel>().0, "main");
+        assert_eq!(
+            app.world().resource::<level::LevelLoadRequested>().0,
+            Some("main".to_string())
+        );
     }
 }
