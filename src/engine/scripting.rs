@@ -2,6 +2,8 @@ use bevy::prelude::*;
 use bevy_mod_scripting::prelude::*;
 use bevy_mod_scripting_bindings::{FunctionCallContext, InteropError, ScriptValue};
 use crate::engine::components::Player;
+use crate::engine::input::PlayerAction;
+use leafwing_input_manager::prelude::InputMap;
 use std::fs;
 use std::path::Path;
 
@@ -24,9 +26,12 @@ impl Default for ScriptedTuning {
 
 #[script_bindings(remote, unregistered)]
 impl World {
-    /// Called from `player.lua`'s `on_script_loaded`/`on_script_reloaded` as
-    /// `world.set_player_tuning(...)`. Lua is the source of truth for these
-    /// values; this just copies them onto the player's `ScriptedTuning`.
+    /// Called from `player.lua`'s `on_scene_loaded` as
+    /// `world.set_player_tuning(...)`. `on_scene_loaded` only fires once the
+    /// player entity actually exists (see `player::broadcast_scene_loaded`),
+    /// so the query below is expected to always find it. Lua is the source
+    /// of truth for these values; this just copies them onto the player's
+    /// `ScriptedTuning`.
     pub fn set_player_tuning(
         context: FunctionCallContext,
         move_speed: f32,
@@ -40,13 +45,15 @@ impl World {
                 tuning.move_speed = move_speed;
                 tuning.jump_force = jump_force;
                 tuning.gravity = gravity;
+            } else {
+                warn!("set_player_tuning called but no Player entity exists yet");
             }
         })?;
         Ok(())
     }
 
-    /// Called from `config/player_input.lua`'s `on_script_loaded`/`on_script_reloaded`
-    /// as `world.set_player_input(config)`. A malformed config is rejected with
+    /// Called from `input.lua`'s `on_scene_loaded` as
+    /// `world.set_player_input(config)`. A malformed config is rejected with
     /// a warning and the player's current bindings stay in effect.
     pub fn set_player_input(
         context: FunctionCallContext,
@@ -56,10 +63,12 @@ impl World {
         world.with_world_mut_access(|world| {
             match crate::engine::input::parse_input_config(&config) {
                 Ok(map) => {
-                    if let Some(mut pending) =
-                        world.get_resource_mut::<crate::engine::input::PendingPlayerInputMap>()
-                    {
-                        pending.0 = Some(map);
+                    let mut input_query =
+                        world.query_filtered::<&mut InputMap<PlayerAction>, With<Player>>();
+                    if let Ok(mut input_map) = input_query.single_mut(world) {
+                        *input_map = map;
+                    } else {
+                        warn!("set_player_input called but no Player entity exists yet");
                     }
                 }
                 Err(e) => warn!("player_input.lua config rejected, keeping current bindings: {e}"),

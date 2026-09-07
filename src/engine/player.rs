@@ -5,16 +5,62 @@ use crate::engine::input::player_input_map;
 use crate::engine::scripting::ScriptedTuning;
 use bevy::ecs::system::RunSystemOnce;
 use bevy::prelude::*;
+use bevy_mod_scripting::prelude::*;
 use bevy_rapier2d::prelude::{Collider, KinematicCharacterController, RigidBody};
 
 const PLAYER_SIZE: Vec2 = Vec2::new(40.0, 48.0);
 const PLAYER_COLOR: Color = Color::srgb(0.2, 0.4, 0.9);
 
+callback_labels!(OnSceneLoaded => "on_scene_loaded");
+
+/// Set by `spawn_player` right after the player entity is actually spawned
+/// (initial load and every "Reload Level"); consumed by `broadcast_scene_loaded`,
+/// which fires `on_scene_loaded` at every loaded script. This gives scripts an
+/// explicit, correctly-timed hook for anything that needs the player to
+/// exist (tuning, input bindings) — unlike BMS's automatic `on_script_loaded`,
+/// which fires as soon as a script itself loads, before the player is spawned.
+#[derive(Resource, Default)]
+pub struct SceneLoadedRequested(pub bool);
+
+/// Fires `on_scene_loaded` on every currently-loaded script entity once
+/// `SceneLoadedRequested` is set. A script that doesn't define
+/// `on_scene_loaded` is unaffected (same no-op behavior BMS already uses for
+/// scripts that don't define `on_script_loaded`).
+pub fn broadcast_scene_loaded(
+    mut requested: ResMut<SceneLoadedRequested>,
+    scripts: Query<(Entity, &ScriptComponent)>,
+    mut callbacks: MessageWriter<ScriptCallbackEvent>,
+) {
+    if !requested.0 {
+        return;
+    }
+    requested.0 = false;
+    for (entity, script) in &scripts {
+        let Some(handle) = script.0.first() else {
+            continue;
+        };
+        callbacks.write(ScriptCallbackEvent::new_for_script_entity(
+            OnSceneLoaded,
+            vec![],
+            handle.clone(),
+            entity,
+        ));
+    }
+}
+
 pub struct PlayerPlugin;
 
 impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, spawn_player);
+        app.init_resource::<SceneLoadedRequested>().add_systems(
+            Update,
+            (
+                spawn_player,
+                broadcast_scene_loaded,
+                event_handler::<OnSceneLoaded, LuaScriptingPlugin>,
+            )
+                .chain(),
+        );
     }
 }
 
@@ -38,6 +84,7 @@ pub fn spawn_player(world: &mut World) {
     }
 
     let spawn = world.resource::<PlayerSpawn>().0;
+    world.resource_mut::<SceneLoadedRequested>().0 = true;
     world.spawn((
         Sprite {
             color: PLAYER_COLOR,

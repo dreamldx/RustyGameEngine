@@ -1,4 +1,3 @@
-use crate::engine::components::Player;
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use bevy_mod_scripting_bindings::ScriptValue;
@@ -114,23 +113,6 @@ pub fn parse_input_config(value: &ScriptValue) -> Result<InputMap<PlayerAction>,
     Ok(map)
 }
 
-#[derive(Resource, Default)]
-pub struct PendingPlayerInputMap(pub Option<InputMap<PlayerAction>>);
-
-pub fn apply_player_input_map(
-    mut pending: ResMut<PendingPlayerInputMap>,
-    mut player: Query<&mut InputMap<PlayerAction>, With<Player>>,
-) {
-    if pending.0.is_none() {
-        return;
-    }
-    let Ok(mut map) = player.single_mut() else {
-        return;
-    };
-    *map = pending.0.take().expect("checked is_none above");
-    info!("Applied player input map from player_input.lua");
-}
-
 #[cfg(test)]
 mod tests { 
     use super::*;
@@ -195,8 +177,6 @@ mod tests {
 #[cfg(test)]
 mod config_tests {
     use super::*;
-    use crate::engine::components::Player;
-    use bevy::input::InputPlugin;
     use bevy_mod_scripting_bindings::ScriptValue;
 
     fn sv_str(s: &str) -> ScriptValue {
@@ -289,47 +269,5 @@ mod config_tests {
     #[test]
     fn parse_input_config_rejects_non_map_value() {
         assert!(parse_input_config(&sv_str("nope")).is_err());
-    }
-
-    fn apply_test_app() -> App {
-        let mut app = App::new();
-        app.add_plugins((
-            MinimalPlugins,
-            InputPlugin,
-            InputManagerPlugin::<PlayerAction>::default(),
-        ));
-        app.init_resource::<PendingPlayerInputMap>();
-        app.add_systems(Update, apply_player_input_map);
-        app
-    }
-
-    #[test]
-    fn apply_player_input_map_overwrites_player_map_and_clears_pending() {
-        let mut app = apply_test_app();
-        let player = app.world_mut().spawn((Player, player_input_map())).id();
-
-        let new_map = InputMap::default().with(PlayerAction::Jump, KeyCode::KeyJ);
-        app.world_mut().resource_mut::<PendingPlayerInputMap>().0 = Some(new_map.clone());
-        app.update();
-
-        assert_eq!(
-            app.world().get::<InputMap<PlayerAction>>(player).unwrap(),
-            &new_map
-        );
-        assert!(app.world().resource::<PendingPlayerInputMap>().0.is_none());
-    }
-
-    #[test]
-    fn apply_player_input_map_keeps_pending_until_player_exists() {
-        let mut app = apply_test_app();
-
-        let new_map = InputMap::default().with(PlayerAction::Jump, KeyCode::KeyJ);
-        app.world_mut().resource_mut::<PendingPlayerInputMap>().0 = Some(new_map);
-        app.update();
-
-        assert!(
-            app.world().resource::<PendingPlayerInputMap>().0.is_some(),
-            "pending map must survive until the player entity is spawned"
-        );
     }
 }
