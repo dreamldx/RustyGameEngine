@@ -15,6 +15,7 @@ use bevy::prelude::*;
 use bevy::reflect::TypeRegistration;
 use bevy_egui::EguiPlugin;
 use bevy_mod_scripting::prelude::*;
+use bevy_rapier2d::prelude::{NoUserData, RapierPhysicsPlugin};
 use input::{DebugAction, PlayerAction};
 use leafwing_input_manager::prelude::InputManagerPlugin;
 
@@ -62,6 +63,7 @@ impl Plugin for EnginePlugin {
             ..default()
         }))
 
+            .add_plugins(RapierPhysicsPlugin::<NoUserData>::default())
             .add_plugins(EguiPlugin::default())
             .add_plugins(FrameTimeDiagnosticsPlugin::default())
             .add_plugins(EntityCountDiagnosticsPlugin::default())

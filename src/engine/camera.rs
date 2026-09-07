@@ -1,7 +1,7 @@
 use crate::engine::components::Player;
-use crate::engine::level::{LEVEL_MAX_X, LEVEL_MIN_X};
-use crate::engine::systems::clamp_player_bounds;
+use crate::engine::level::LevelBounds;
 use bevy::prelude::*;
+use bevy_rapier2d::prelude::PhysicsSet;
 
 pub struct CameraPlugin;
 
@@ -18,7 +18,12 @@ impl Plugin for CameraPlugin {
         // The starting Transform here is a throwaway; spawn_player resets
         // it correctly once PlayerSpawn is actually known.
         app.add_systems(Startup, spawn_camera)
-            .add_systems(Update, camera_follow.after(clamp_player_bounds));
+            // The player's Transform isn't resolved for this frame until
+            // Rapier's PostUpdate step processes `move_player_kcc`'s
+            // requested translation (see systems.rs) — reading it any
+            // earlier (e.g. in Update) would follow last frame's stale
+            // position instead of where the player actually ends up.
+            .add_systems(PostUpdate, camera_follow.after(PhysicsSet::Writeback));
     }
 }
 
@@ -28,11 +33,12 @@ pub fn spawn_camera(mut commands: Commands) {
 
 /// Follows the player horizontally/vertically, but clamps by the camera's
 /// own viewport edges rather than its center — otherwise the center could
-/// sit inside `[LEVEL_MIN_X, LEVEL_MAX_X]` while half the viewport still
-/// shows empty space past the level's edge.
+/// sit inside `[LevelBounds::min_x, LevelBounds::max_x]` while half the
+/// viewport still shows empty space past the level's edge.
 pub fn camera_follow(
     mut camera_query: Query<(&mut Transform, &Projection), (With<Camera2d>, Without<Player>)>,
     player_query: Query<&Transform, With<Player>>,
+    bounds: Res<LevelBounds>,
 ) {
     let Ok(player_transform) = player_query.single() else {
         return;
@@ -56,8 +62,8 @@ pub fn camera_follow(
     if half_width <= 1.0 || half_height <= 1.0 {
         return;
     }
-    let min_x = LEVEL_MIN_X + half_width;
-    let max_x = (LEVEL_MAX_X - half_width).max(min_x);
+    let min_x = bounds.min_x + half_width;
+    let max_x = (bounds.max_x - half_width).max(min_x);
     camera_transform.translation.x = player_transform.translation.x.clamp(min_x, max_x);
 
     // Vertical dead zone: the camera only moves once the player leaves the

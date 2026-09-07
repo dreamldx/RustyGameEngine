@@ -5,6 +5,7 @@ use crate::engine::input::player_input_map;
 use crate::engine::scripting::ScriptedTuning;
 use bevy::ecs::system::RunSystemOnce;
 use bevy::prelude::*;
+use bevy_rapier2d::prelude::{Collider, KinematicCharacterController, RigidBody};
 
 const PLAYER_SIZE: Vec2 = Vec2::new(40.0, 48.0);
 const PLAYER_COLOR: Color = Color::srgb(0.2, 0.4, 0.9);
@@ -44,12 +45,9 @@ pub fn spawn_player(world: &mut World) {
             ..default()
         },
         Transform::from_xyz(spawn.x, spawn.y, 1.0),
-        Collider(vec![
-            Vec2::new(-PLAYER_SIZE.x / 2.0, -PLAYER_SIZE.y / 2.0),
-            Vec2::new(PLAYER_SIZE.x / 2.0, -PLAYER_SIZE.y / 2.0),
-            Vec2::new(PLAYER_SIZE.x / 2.0, PLAYER_SIZE.y / 2.0),
-            Vec2::new(-PLAYER_SIZE.x / 2.0, PLAYER_SIZE.y / 2.0),
-        ]),
+        RigidBody::KinematicPositionBased,
+        Collider::cuboid(PLAYER_SIZE.x / 2.0, PLAYER_SIZE.y / 2.0),
+        KinematicCharacterController::default(),
         Player,
         Velocity::default(),
         Grounded::default(),

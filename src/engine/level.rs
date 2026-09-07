@@ -1,5 +1,5 @@
 use crate::engine::ReadyToPlay;
-use crate::engine::components::{Collider, Platform, Player, PlayerSpawn};
+use crate::engine::components::{Platform, Player, PlayerSpawn};
 use bevy::asset::RenderAssetUsages;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::platform::collections::HashMap;
@@ -7,13 +7,83 @@ use bevy::prelude::*;
 use bevy_mod_scripting::prelude::*;
 use bevy_mod_scripting_bindings::{FunctionCallContext, InteropError, ScriptValue};
 use bevy_mod_scripting_core::event::ScriptCallbackResponseEvent;
+use bevy_rapier2d::prelude::{Collider, RigidBody};
 use std::fs;
 use std::path::Path;
 
-/// Horizontal bounds of the level. The player and camera are both clamped
-/// to this range (see `systems::clamp_player_bounds`/`systems::camera_follow`).
-pub const LEVEL_MIN_X: f32 = 0.0;
-pub const LEVEL_MAX_X: f32 = 10800.0;
+/// Horizontal bounds of the current level. Defaults to a wide fallback range
+/// for a level script that never calls `world.set_level_bounds(...)` (or a
+/// yscn scene with no `LevelBounds` entity). The player is kept inside this
+/// range by the invisible walls `sync_level_bounds_walls` spawns; the camera
+/// clamps to it separately (see `camera::camera_follow`).
+#[derive(Resource, Clone, Copy)]
+pub struct LevelBounds {
+    pub min_x: f32,
+    pub max_x: f32,
+}
+
+impl Default for LevelBounds {
+    fn default() -> Self {
+        Self { min_x: 0.0, max_x: 10800.0 }
+    }
+}
+
+/// Whether the current level's `load()` has explicitly called
+/// `world.set_level_bounds(...)`. Reset to `false` each time a level load is
+/// requested (`request_level_load`); if still `false` once `load()`
+/// finishes, `handle_level_load_response` falls back to `0..ObservedMaxX`
+/// instead of leaving the *previous* level's `LevelBounds` in place.
+#[derive(Resource, Default)]
+pub struct LevelBoundsExplicit(pub bool);
+
+/// Running maximum world-space x-coordinate across every platform spawned
+/// so far for the current level (updated by `spawn_platform_entity`). Reset
+/// to `0.0` each time a level load is requested. Used as the auto-computed
+/// `LevelBounds::max_x` fallback — see `LevelBoundsExplicit`.
+#[derive(Resource, Default)]
+pub struct ObservedMaxX(pub f32);
+
+/// Marks the two invisible boundary-wall entities `sync_level_bounds_walls`
+/// spawns, so it can despawn and respawn them when `LevelBounds` changes.
+/// Deliberately not `Platform`, so `reload_level`'s despawn (which only
+/// targets `Platform`/`Player`) leaves them alone in between.
+#[derive(Component)]
+pub struct BoundaryWall;
+
+/// Half-extents of each boundary wall. The height just needs to comfortably
+/// exceed any player position a level could produce — it doesn't need to
+/// match the level's actual vertical extent, since the walls only exist to
+/// block horizontal movement past `LevelBounds::min_x`/`max_x`.
+const BOUNDARY_WALL_HALF_WIDTH: f32 = 10.0;
+const BOUNDARY_WALL_HALF_HEIGHT: f32 = 100_000.0;
+
+/// Respawns the two static invisible boundary walls whenever `LevelBounds`
+/// changes (initial default on startup, or a level script/yscn scene
+/// setting its own range during `load()`). Rapier's own character-controller
+/// sweep then enforces the range the same way it enforces collision with any
+/// platform, instead of a separate manual clamp in `systems::move_player_kcc`.
+pub fn sync_level_bounds_walls(
+    mut commands: Commands,
+    bounds: Res<LevelBounds>,
+    walls: Query<Entity, With<BoundaryWall>>,
+) {
+    if !bounds.is_changed() {
+        return;
+    }
+    for entity in &walls {
+        commands.entity(entity).despawn();
+    }
+    let half_width = BOUNDARY_WALL_HALF_WIDTH;
+    let half_height = BOUNDARY_WALL_HALF_HEIGHT;
+    for wall_center_x in [bounds.min_x - half_width, bounds.max_x + half_width] {
+        commands.spawn((
+            Transform::from_xyz(wall_center_x, 0.0, 0.0),
+            RigidBody::Fixed,
+            Collider::cuboid(half_width, half_height),
+            BoundaryWall,
+        ));
+    }
+}
 
 fn compute_bounds(vertices: &[Vec2]) -> (Vec2, Vec2) {
     let min_x = vertices.iter().map(|v| v.x).reduce(f32::min).unwrap_or(0.0);
@@ -66,6 +136,18 @@ pub fn spawn_platform_entity(
     mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
     mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
 
+    let Some(collider) = Collider::convex_hull(&centered_verts) else {
+        error!("spawn_platform_entity: points don't form a valid convex hull");
+        return;
+    };
+
+    let platform_max_x = centered_verts
+        .iter()
+        .map(|v| v.x + pos.x)
+        .fold(f32::MIN, f32::max);
+    let mut observed_max_x = world.resource_mut::<ObservedMaxX>();
+    observed_max_x.0 = observed_max_x.0.max(platform_max_x);
+
     let mesh_handle = world.resource_mut::<Assets<Mesh>>().add(mesh);
     let material_handle = world
         .resource_mut::<Assets<ColorMaterial>>()
@@ -75,7 +157,8 @@ pub fn spawn_platform_entity(
         Mesh2d(mesh_handle),
         MeshMaterial2d(material_handle),
         Transform::from_translation(pos),
-        Collider(centered_verts),
+        RigidBody::Fixed,
+        collider,
         Platform,
     ));
 }
@@ -108,6 +191,9 @@ impl Plugin for LevelLoadPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<LevelRegistry>()
             .init_resource::<PendingLevelLoad>()
+            .init_resource::<LevelBounds>()
+            .init_resource::<LevelBoundsExplicit>()
+            .init_resource::<ObservedMaxX>()
             .insert_resource(LevelLoadRequested(Some("main".to_string())))
             .add_systems(
                 Update,
@@ -118,6 +204,7 @@ impl Plugin for LevelLoadPlugin {
                     // Lua `load` function. Without this, request_level_load's
                     // event just sits in the message queue forever.
                     event_handler::<OnLoadLevel, LuaScriptingPlugin>,
+                    sync_level_bounds_walls,
                 ),
             );
     }
@@ -152,6 +239,24 @@ impl World {
         let world = context.world()?;
         world.with_world_mut_access(|world| {
             world.insert_resource(PlayerSpawn(Vec2::new(x, y)));
+        })?;
+        Ok(())
+    }
+
+    /// Called from a level script's `load()` as
+    /// `world.set_level_bounds(min_x, max_x)`. Optional — a level that never
+    /// calls this gets `0..ObservedMaxX` instead (see `LevelBoundsExplicit`).
+    /// Triggers `sync_level_bounds_walls` to respawn the boundary walls at
+    /// the new range.
+    pub fn set_level_bounds(
+        context: FunctionCallContext,
+        min_x: f32,
+        max_x: f32,
+    ) -> Result<(), InteropError> {
+        let world = context.world()?;
+        world.with_world_mut_access(|world| {
+            world.insert_resource(LevelBounds { min_x, max_x });
+            world.resource_mut::<LevelBoundsExplicit>().0 = true;
         })?;
         Ok(())
     }
@@ -240,6 +345,8 @@ fn request_level_load(
     registry: Res<LevelRegistry>,
     scripts: Query<&ScriptComponent>,
     mut callbacks: MessageWriter<ScriptCallbackEvent>,
+    mut bounds_explicit: ResMut<LevelBoundsExplicit>,
+    mut observed_max_x: ResMut<ObservedMaxX>,
 ) {
     let Some(name) = requested.0.clone() else {
         return;
@@ -257,6 +364,8 @@ fn request_level_load(
         return;
     };
 
+    bounds_explicit.0 = false;
+    observed_max_x.0 = 0.0;
     callbacks.write(
         ScriptCallbackEvent::new_for_script_entity(OnLoadLevel, vec![], handle.clone(), entity)
             .with_response(),
@@ -269,6 +378,9 @@ fn handle_level_load_response(
     mut pending: ResMut<PendingLevelLoad>,
     mut responses: MessageReader<ScriptCallbackResponseEvent>,
     mut ready_to_play: ResMut<ReadyToPlay>,
+    bounds_explicit: Res<LevelBoundsExplicit>,
+    observed_max_x: Res<ObservedMaxX>,
+    mut bounds: ResMut<LevelBounds>,
 ) {
     let Some(name) = pending.0.clone() else {
         return;
@@ -279,6 +391,9 @@ fn handle_level_load_response(
         }
         if let Err(e) = &response.response {
             error!("Level '{name}' load() failed: {e}");
+        }
+        if !bounds_explicit.0 {
+            *bounds = LevelBounds { min_x: 0.0, max_x: observed_max_x.0 };
         }
         pending.0 = None;
         ready_to_play.0 = true;

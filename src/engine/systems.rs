@@ -1,11 +1,12 @@
 use crate::engine::ReadyToPlay;
 use crate::engine::components::*;
 use crate::engine::debug_ui::{self, ReloadLevelRequested};
-use crate::engine::input::{self, PlayerAction};
-use crate::engine::level::{self, LEVEL_MAX_X, LEVEL_MIN_X};
+use crate::engine::input::PlayerAction;
+use crate::engine::level;
 use crate::engine::scripting::{self, ScriptedTuning};
 use crate::engine::{camera, player};
 use bevy::prelude::*;
+use bevy_rapier2d::prelude::{KinematicCharacterController, KinematicCharacterControllerOutput};
 use leafwing_input_manager::prelude::*;
 
 pub struct GameplaySystemsPlugin;
@@ -14,8 +15,6 @@ impl Plugin for GameplaySystemsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ReloadLevelRequested>()
             .init_resource::<ReadyToPlay>()
-            .init_resource::<input::PendingPlayerInputMap>()
-
             .add_plugins((
                 player::PlayerPlugin,
                 camera::CameraPlugin,
@@ -24,19 +23,19 @@ impl Plugin for GameplaySystemsPlugin {
             ))
             .add_systems(
                 Startup,
-                (scripting::load_scripts, level::load_level_scripts).chain(),
+                (level::load_level_scripts, scripting::load_scripts).chain(),
             )
             .add_systems(
                 Update,
                 (
+                    sync_grounded_from_kcc,
                     player_input,
                     apply_gravity,
-                    ground_detection,
-                    apply_velocity,
-                    clamp_player_bounds,
-                ).chain(),
+                    move_player_kcc,
+                )
+                    .chain(),
             )
-            .add_systems(Update, (check_fall, input::apply_player_input_map));
+            .add_systems(Update, check_fall);
     }
 }
 
@@ -67,136 +66,49 @@ pub fn apply_gravity(
     }
 }
 
-pub fn apply_velocity(time: Res<Time>, mut query: Query<(&mut Transform, &Velocity)>) {
-    for (mut transform, velocity) in &mut query {
-        transform.translation.x += velocity.0.x * time.delta_secs();
-        transform.translation.y += velocity.0.y * time.delta_secs();
-    }
+/// Feeds this frame's desired movement into Rapier's character controller,
+/// which resolves it via shape-casting (a continuous sweep, not a discrete
+/// position update) — the player can't tunnel through geometry no matter
+/// how large a single frame's movement is, unlike the old naive
+/// `transform += velocity * dt` this replaced. This is also what enforces
+/// the level's horizontal bounds: `level::sync_level_bounds_walls` places
+/// static wall colliders at `LevelBounds::min_x`/`max_x`, so the KCC's sweep
+/// stops the player there the same way it stops them on any platform — no
+/// manual clamping needed here.
+pub fn move_player_kcc(
+    time: Res<Time>,
+    mut query: Query<(&Velocity, &mut KinematicCharacterController), With<Player>>,
+) {
+    let Ok((velocity, mut controller)) = query.single_mut() else {
+        return;
+    };
+    controller.translation = Some(velocity.0 * time.delta_secs());
 }
 
-fn world_vertices(local_verts: &[Vec2], transform: &Transform) -> Vec<Vec2> {
-    local_verts
-        .iter()
-        .map(|v| {
-            let w = transform.transform_point(Vec3::new(v.x, v.y, 0.0));
-            Vec2::new(w.x, w.y)
-        })
-        .collect()
-}
-
-fn project(vertices: &[Vec2], axis: Vec2) -> (f32, f32) {
-    let mut min = f32::MAX;
-    let mut max = f32::MIN;
-    for v in vertices {
-        let dot = v.dot(axis);
-        min = min.min(dot);
-        max = max.max(dot);
-    }
-    (min, max)
-}
-
-fn axis_overlap(min1: f32, max1: f32, min2: f32, max2: f32) -> Option<f32> {
-    if max1 < min2 || max2 < min1 {
-        return None;
-    }
-    Some(f32::min(max1 - min2, max2 - min1))
-}
-
-fn edge_normals(vertices: &[Vec2]) -> Vec<Vec2> {
-    let n = vertices.len();
-    let mut axes = Vec::with_capacity(n);
-    for i in 0..n {
-        let j = (i + 1) % n;
-        let edge = vertices[j] - vertices[i];
-        let normal = Vec2::new(-edge.y, edge.x);
-        let len = normal.length();
-        if len > 0.0001 {
-            axes.push(normal / len);
-        }
-    }
-    axes
-}
-
-fn sat_collision(verts_a: &[Vec2], verts_b: &[Vec2]) -> Option<(Vec2, f32)> {
-    let mut min_overlap = f32::MAX;
-    let mut mtv = Vec2::ZERO;
-
-    let axes_a = edge_normals(verts_a);
-    let axes_b = edge_normals(verts_b);
-
-    for axis in axes_a.iter().chain(axes_b.iter()) {
-        let (min_a, max_a) = project(verts_a, *axis);
-        let (min_b, max_b) = project(verts_b, *axis);
-        if let Some(o) = axis_overlap(min_a, max_a, min_b, max_b) {
-            if o < min_overlap {
-                min_overlap = o;
-                mtv = *axis;
-            }
-        } else {
-            return None;
-        }
-    }
-
-    if min_overlap < f32::MAX {
-        Some((mtv, min_overlap))
-    } else {
-        None
-    }
-}
-
-pub fn ground_detection(
-    mut player_query: Query<
-        (&Transform, &Collider, &mut Grounded, &mut Velocity),
+/// Reads back last frame's character-controller result (Rapier resolves
+/// `KinematicCharacterController.translation` and writes this output during
+/// its own `PostUpdate` pass, so it reflects the *previous* frame's
+/// movement) to update `Grounded` and stop accumulating fall speed once
+/// landed — mirroring what the old SAT-based `ground_detection` did, just
+/// sourced from Rapier's sweep result instead of a manual overlap test.
+pub fn sync_grounded_from_kcc(
+    mut query: Query<
+        (&KinematicCharacterControllerOutput, &mut Grounded, &mut Velocity),
         With<Player>,
     >,
-    platform_query: Query<(&Transform, &Collider), With<Platform>>,
 ) {
-    let Ok((player_transform, player_collider, mut grounded, mut velocity)) =
-        player_query.single_mut()
-    else {
+    let Ok((output, mut grounded, mut velocity)) = query.single_mut() else {
         return;
     };
-
-    let player_verts = world_vertices(&player_collider.0, player_transform);
-
-    let mut on_ground = false;
-
-    for (plat_transform, plat_collider) in &platform_query {
-        let plat_verts = world_vertices(&plat_collider.0, plat_transform);
-        let player_falling = velocity.0.y <= 0.0;
-
-        if let Some((mtv, _)) = sat_collision(&player_verts, &plat_verts) {
-            let player_center = player_transform.translation.truncate();
-            let plat_center = plat_transform.translation.truncate();
-            let to_player = player_center - plat_center;
-            let directed_mtv = if mtv.dot(to_player) < 0.0 { -mtv } else { mtv };
-
-            if directed_mtv.y > 0.0 && player_falling {
-                on_ground = true;
-                velocity.0.y = 0.0;
-            }
-        }
-    }
-
-    grounded.0 = on_ground;
-}
-
-/// Keeps the player within the level's horizontal bounds — trying to walk
-/// past either edge just stops movement there instead of leaving the level.
-pub fn clamp_player_bounds(mut query: Query<(&mut Transform, &mut Velocity), With<Player>>) {
-    let Ok((mut transform, mut velocity)) = query.single_mut() else {
-        return;
-    };
-    if transform.translation.x < LEVEL_MIN_X {
-        transform.translation.x = LEVEL_MIN_X;
-        velocity.0.x = velocity.0.x.max(0.0);
-    } else if transform.translation.x > LEVEL_MAX_X {
-        transform.translation.x = LEVEL_MAX_X;
-        velocity.0.x = velocity.0.x.min(0.0);
+    grounded.0 = output.grounded;
+    if output.grounded && velocity.0.y <= 0.0 {
+        velocity.0.y = 0.0;
     }
 }
 
-const FALL_DEATH_Y: f32 = -1000.0;
+/// Player y-position below which `check_fall` reloads the level. Public so
+/// `debug_ui::draw_bounds_gizmo` can draw it as a reference line.
+pub const FALL_DEATH_Y: f32 = -1000.0;
 
 pub fn check_fall(
     player_query: Query<&Transform, With<Player>>,
